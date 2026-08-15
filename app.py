@@ -1,3 +1,4 @@
+import hmac
 import os
 import sqlite3
 from datetime import date, datetime
@@ -17,6 +18,38 @@ DB_PATH = Path(os.environ.get("DB_PATH", Path(__file__).parent / "invoices.db"))
 INVOICES_DIR = Path(os.environ.get("INVOICES_DIR", Path(__file__).parent / "invoices"))
 
 st.set_page_config(page_title="Rooster's Inventory Management", page_icon="🍔", layout="wide")
+
+
+def require_login():
+    """Gate the whole app behind a shared password when APP_PASSWORD is set.
+
+    Unset (local dev, as before) skips the gate entirely.
+    """
+    app_password = os.environ.get("APP_PASSWORD")
+    if not app_password:
+        return
+    if st.session_state.get("authenticated"):
+        return
+
+    st.title("🔒 Rooster's Inventory Management")
+    with st.form("login_form"):
+        entered_password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Log in")
+    if submitted:
+        if hmac.compare_digest(entered_password, app_password):
+            st.session_state["authenticated"] = True
+            st.rerun()
+        else:
+            st.error("Incorrect password.")
+    st.stop()
+
+
+require_login()
+
+if st.session_state.get("authenticated"):
+    if st.sidebar.button("🚪 Log out"):
+        st.session_state["authenticated"] = False
+        st.rerun()
 
 
 @st.cache_data
