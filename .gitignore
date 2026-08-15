@@ -1,0 +1,29 @@
+# Business data — never commit real invoices or generated orders.
+# bestellliste/ is NOT ignored: it holds blank vendor order-sheet templates
+# (no transaction data) that order_utils.py needs at runtime to generate orders.
+invoices/
+orders/
+
+# Database — source of truth and its backups/dumps, contains the same business data
+invoices.db
+invoices.db.bak-*
+invoices_dump.sql
+
+# Credentials / secrets
+.env
+.env.*
+.streamlit/secrets.toml
+*.pem
+*.key
+credentials.json
+
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Logs
+*.log
+
+# OS
+.DS_Store
