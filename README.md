@@ -2,7 +2,7 @@
 
 A Streamlit app that turns a folder of German wholesale invoices (FeinFood Express GmbH, Fatih Et GmbH, and METRO) into a queryable product catalog and cost ledger, matches the FeinFood catalog against the vendor's own order sheets ("Bestellliste"), and lets you place inventory orders, generate vendor-ready order files, verify a vendor's invoice against what you actually ordered, and track meat and cash-and-carry spend by month — all backed by a single SQLite database.
 
-**Schema reference:** [Entity Relationship Diagram](https://claude.ai/code/artifact/216590c8-d043-4ae2-9828-9d2d088dcb73) — covers the core catalog/order/invoice schema; the Fatihet and Metro tables added below aren't in the diagram yet.
+**Schema reference:** [Entity Relationship Diagram](https://claude.ai/code/artifact/216590c8-d043-4ae2-9828-9d2d088dcb73) — all 10 tables, including the Fatihet and Metro invoice ledgers.
 
 ## Why this exists
 
