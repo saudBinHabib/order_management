@@ -1,14 +1,16 @@
 import os
 import sqlite3
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 
 import compare_utils
+import fatihet_parser
 import invoice_ingest
 import invoice_parser
+import metro_parser
 import order_utils
 
 DB_PATH = Path(os.environ.get("DB_PATH", Path(__file__).parent / "invoices.db"))
@@ -76,10 +78,20 @@ def load_monthly_costs():
            FROM invoices WHERE netto_total IS NOT NULL""",
         conn,
     )
+    fatihet_df = pd.read_sql_query(
+        "SELECT invoice_date AS date, netto_total, vat_total, brutto_total FROM fatihet_invoices",
+        conn,
+    )
+    metro_df = pd.read_sql_query(
+        "SELECT invoice_date AS date, netto_total, vat_total, brutto_total FROM metro_invoices",
+        conn,
+    )
     conn.close()
     invoices_df["source"] = "Imported Invoices"
+    fatihet_df["source"] = "Fatihet"
+    metro_df["source"] = "Metro"
 
-    df = pd.concat([orders_df, invoices_df], ignore_index=True)
+    df = pd.concat([orders_df, invoices_df, fatihet_df, metro_df], ignore_index=True)
     if not df.empty:
         df["month"] = df["date"].str.slice(0, 7)  # YYYY-MM
     return df
@@ -105,6 +117,140 @@ def set_invoice_paid_status(invoice_number: str, paid: bool):
         "UPDATE invoices SET is_paid = ?, paid_date = ? WHERE invoice_number = ?",
         (1 if paid else 0, date.today().isoformat() if paid else None, invoice_number),
     )
+    conn.commit()
+    conn.close()
+
+
+@st.cache_data
+def load_fatihet_invoices():
+    conn = sqlite3.connect(DB_PATH)
+    df = pd.read_sql_query(
+        """SELECT invoice_number, invoice_date, delivery_date,
+                  netto_total, vat_total, brutto_total, source_file
+           FROM fatihet_invoices ORDER BY invoice_date DESC""",
+        conn,
+    )
+    conn.close()
+    return df
+
+
+def load_fatihet_invoice_items(invoice_number: str):
+    conn = sqlite3.connect(DB_PATH)
+    df = pd.read_sql_query(
+        """SELECT pos, description, product_number, quantity, unit, unit_price, line_total
+           FROM fatihet_invoice_items WHERE invoice_number = ? ORDER BY pos""",
+        conn,
+        params=(invoice_number,),
+    )
+    conn.close()
+    return df
+
+
+def import_fatihet_invoice(parsed: dict, source_file: str):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """INSERT INTO fatihet_invoices
+               (invoice_number, invoice_date, delivery_date, netto_total, vat_total, brutto_total, source_file, imported_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                parsed["invoice_number"], parsed["invoice_date"], parsed["delivery_date"],
+                parsed["netto_total"], parsed["vat_total"], parsed["brutto_total"],
+                source_file, datetime.now().isoformat(timespec="seconds"),
+            ),
+        )
+        for item in parsed["items"]:
+            cur.execute(
+                """INSERT INTO fatihet_invoice_items
+                   (invoice_number, pos, description, product_number, quantity, unit, unit_price, line_total)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    parsed["invoice_number"], item["pos"], item["description"], item["product_number"],
+                    item["quantity"], item["unit"], item["unit_price"], item["line_total"],
+                ),
+            )
+        conn.commit()
+        return True, f"Imported invoice {parsed['invoice_number']} — {len(parsed['items'])} items."
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        return False, f"Invoice {parsed['invoice_number']} has already been imported."
+    finally:
+        conn.close()
+
+
+def delete_fatihet_invoice(invoice_number: str):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM fatihet_invoice_items WHERE invoice_number = ?", (invoice_number,))
+    cur.execute("DELETE FROM fatihet_invoices WHERE invoice_number = ?", (invoice_number,))
+    conn.commit()
+    conn.close()
+
+
+@st.cache_data
+def load_metro_invoices():
+    conn = sqlite3.connect(DB_PATH)
+    df = pd.read_sql_query(
+        """SELECT invoice_number, invoice_date, delivery_date,
+                  netto_total, vat_total, brutto_total, source_file
+           FROM metro_invoices ORDER BY invoice_date DESC""",
+        conn,
+    )
+    conn.close()
+    return df
+
+
+def load_metro_invoice_items(invoice_number: str):
+    conn = sqlite3.connect(DB_PATH)
+    df = pd.read_sql_query(
+        """SELECT pos, description, product_number, quantity, unit, unit_price, line_total
+           FROM metro_invoice_items WHERE invoice_number = ? ORDER BY pos""",
+        conn,
+        params=(invoice_number,),
+    )
+    conn.close()
+    return df
+
+
+def import_metro_invoice(parsed: dict, source_file: str):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            """INSERT INTO metro_invoices
+               (invoice_number, invoice_date, delivery_date, netto_total, vat_total, brutto_total, source_file, imported_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                parsed["invoice_number"], parsed["invoice_date"], parsed["delivery_date"],
+                parsed["netto_total"], parsed["vat_total"], parsed["brutto_total"],
+                source_file, datetime.now().isoformat(timespec="seconds"),
+            ),
+        )
+        for item in parsed["items"]:
+            cur.execute(
+                """INSERT INTO metro_invoice_items
+                   (invoice_number, pos, description, product_number, quantity, unit, unit_price, line_total)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    parsed["invoice_number"], item["pos"], item["description"], item["product_number"],
+                    item["quantity"], item["unit"], item["unit_price"], item["line_total"],
+                ),
+            )
+        conn.commit()
+        return True, f"Imported invoice {parsed['invoice_number']} — {len(parsed['items'])} items."
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        return False, f"Invoice {parsed['invoice_number']} has already been imported."
+    finally:
+        conn.close()
+
+
+def delete_metro_invoice(invoice_number: str):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM metro_invoice_items WHERE invoice_number = ?", (invoice_number,))
+    cur.execute("DELETE FROM metro_invoices WHERE invoice_number = ?", (invoice_number,))
     conn.commit()
     conn.close()
 
@@ -349,7 +495,7 @@ else:
     by_source = (
         month_df.groupby("source")[["netto_total", "vat_total", "brutto_total"]]
         .sum()
-        .reindex(["Feinfood Bestellliste", "Nachoking Bestellliste", "Imported Invoices"])
+        .reindex(["Feinfood Bestellliste", "Nachoking Bestellliste", "Imported Invoices", "Fatihet", "Metro"])
         .fillna(0.0)
         .reset_index()
     )
@@ -456,6 +602,220 @@ if last_import:
     st.success(f"Imported {last_import['imported']} invoice(s).")
     if last_import["failed"]:
         st.warning("\n".join(last_import["failed"]))
+
+st.divider()
+st.header("🥩 Fatihet Meat Invoices")
+st.caption(
+    "Upload a Fatih Et (meat vendor) invoice PDF to record what was ordered, when, and its "
+    "Netto/Brutto cost. This doesn't touch the product catalog — meat is tracked separately."
+)
+
+fatihet_file = st.file_uploader("Fatihet invoice (.pdf)", type=["pdf"], key="fatihet_invoice_upload")
+if fatihet_file is not None:
+    try:
+        fatihet_parsed = fatihet_parser.parse_fatihet_invoice_pdf(fatihet_file)
+    except Exception as e:
+        st.error(f"Couldn't parse this PDF: {e}")
+        fatihet_parsed = None
+
+    if fatihet_parsed is not None:
+        if not fatihet_parsed["invoice_number"] or not fatihet_parsed["items"]:
+            st.error("Couldn't find an invoice number or any line items in this PDF.")
+        else:
+            date_line = f"**Invoice {fatihet_parsed['invoice_number']}** — {fatihet_parsed['invoice_date']}"
+            if fatihet_parsed["delivery_date"]:
+                date_line += f" (delivered {fatihet_parsed['delivery_date']})"
+            st.write(date_line)
+
+            fatihet_items_df = pd.DataFrame(fatihet_parsed["items"])[
+                ["pos", "description", "product_number", "quantity", "unit", "unit_price", "line_total"]
+            ].rename(columns={
+                "pos": "#", "description": "Item", "product_number": "Art.-Nr.", "quantity": "Qty",
+                "unit": "Unit", "unit_price": "Unit price (EUR)", "line_total": "Total (EUR)",
+            })
+            st.dataframe(
+                fatihet_items_df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Unit price (EUR)": st.column_config.NumberColumn(format="€%.3f"),
+                    "Total (EUR)": st.column_config.NumberColumn(format="€%.2f"),
+                },
+            )
+
+            fm1, fm2, fm3 = st.columns(3)
+            fm1.metric("Netto", f"€{fatihet_parsed['netto_total']:,.2f}")
+            fm2.metric("USt.", f"€{fatihet_parsed['vat_total']:,.2f}")
+            fm3.metric("Brutto", f"€{fatihet_parsed['brutto_total']:,.2f}")
+
+            if st.button("📥 Import this invoice", type="primary", key="fatihet_import_btn"):
+                ok, msg = import_fatihet_invoice(fatihet_parsed, fatihet_file.name)
+                if ok:
+                    load_fatihet_invoices.clear()
+                    load_monthly_costs.clear()
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.warning(msg)
+
+with st.expander("📋 Fatihet invoice history", expanded=False):
+    fatihet_hist = load_fatihet_invoices()
+    if fatihet_hist.empty:
+        st.caption("No Fatihet invoices imported yet.")
+    else:
+        @st.dialog("Delete Fatihet invoice?")
+        def confirm_delete_fatihet_dialog(invoice_number, invoice_date, brutto_total):
+            st.write(f"Delete invoice **{invoice_number}** ({invoice_date}, €{brutto_total:,.2f} brutto)?")
+            st.warning("This removes the invoice and its line items from history.")
+            st.caption("This cannot be undone.")
+            c_yes, c_no = st.columns(2)
+            if c_yes.button("Yes, delete", type="primary", use_container_width=True, key=f"fatihet_del_yes_{invoice_number}"):
+                delete_fatihet_invoice(invoice_number)
+                load_fatihet_invoices.clear()
+                load_monthly_costs.clear()
+                st.rerun()
+            if c_no.button("No, cancel", use_container_width=True, key=f"fatihet_del_no_{invoice_number}"):
+                st.rerun()
+
+        fh_header = st.columns([1.3, 1.1, 1.1, 0.9, 0.9, 0.9, 0.8, 0.6])
+        for col, label in zip(fh_header, ["Invoice #", "Date", "Delivered", "Netto", "USt.", "Brutto", "Items", ""]):
+            col.markdown(f"**{label}**")
+
+        for row in fatihet_hist.itertuples():
+            fh = st.columns([1.3, 1.1, 1.1, 0.9, 0.9, 0.9, 0.8, 0.6])
+            fh[0].write(row.invoice_number)
+            fh[1].write(row.invoice_date)
+            fh[2].write(row.delivery_date or "—")
+            fh[3].write(f"€{row.netto_total:,.2f}")
+            fh[4].write(f"€{row.vat_total:,.2f}")
+            fh[5].write(f"€{row.brutto_total:,.2f}")
+            with fh[6].popover("View"):
+                fatihet_item_rows = load_fatihet_invoice_items(row.invoice_number)
+                st.dataframe(
+                    fatihet_item_rows.rename(columns={
+                        "pos": "#", "description": "Item", "product_number": "Art.-Nr.", "quantity": "Qty",
+                        "unit": "Unit", "unit_price": "Unit price (EUR)", "line_total": "Total (EUR)",
+                    }),
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Unit price (EUR)": st.column_config.NumberColumn(format="€%.3f"),
+                        "Total (EUR)": st.column_config.NumberColumn(format="€%.2f"),
+                    },
+                )
+            if fh[7].button("🗑️", key=f"fatihet_del_{row.invoice_number}", help="Delete this invoice"):
+                confirm_delete_fatihet_dialog(row.invoice_number, row.invoice_date, row.brutto_total)
+
+st.divider()
+st.header("🏪 Metro Invoices")
+st.caption(
+    "Upload a METRO invoice PDF to record what was ordered, when, and its Netto/Brutto cost. "
+    "This doesn't touch the product catalog — Metro prices change too often to track there. "
+    "Item quantities/prices are best-effort (METRO's invoice is a dense POS ledger); the "
+    "Netto/USt./Brutto totals are read from the invoice's own summary and are reliable."
+)
+
+metro_file = st.file_uploader("Metro invoice (.pdf)", type=["pdf"], key="metro_invoice_upload")
+if metro_file is not None:
+    try:
+        metro_parsed = metro_parser.parse_metro_invoice_pdf(metro_file)
+    except Exception as e:
+        st.error(f"Couldn't parse this PDF: {e}")
+        metro_parsed = None
+
+    if metro_parsed is not None:
+        if not metro_parsed["invoice_number"] or metro_parsed["brutto_total"] is None:
+            st.error("Couldn't find an invoice number or totals in this PDF.")
+        else:
+            metro_date_line = f"**Invoice {metro_parsed['invoice_number']}** — {metro_parsed['invoice_date']}"
+            if metro_parsed["delivery_date"]:
+                metro_date_line += f" (delivered {metro_parsed['delivery_date']})"
+            st.write(metro_date_line)
+
+            if metro_parsed["items"]:
+                metro_items_df = pd.DataFrame(metro_parsed["items"])[
+                    ["pos", "description", "product_number", "quantity", "unit", "unit_price", "line_total"]
+                ].rename(columns={
+                    "pos": "#", "description": "Item", "product_number": "Art.-Nr.", "quantity": "Qty",
+                    "unit": "Unit", "unit_price": "Unit price (EUR)", "line_total": "Total (EUR)",
+                })
+                st.dataframe(
+                    metro_items_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        "Unit price (EUR)": st.column_config.NumberColumn(format="€%.3f"),
+                        "Total (EUR)": st.column_config.NumberColumn(format="€%.2f"),
+                    },
+                )
+            else:
+                st.caption("No line items could be extracted — totals below are still reliable.")
+
+            mm1, mm2, mm3 = st.columns(3)
+            mm1.metric("Netto", f"€{metro_parsed['netto_total']:,.2f}")
+            mm2.metric("USt.", f"€{metro_parsed['vat_total']:,.2f}")
+            mm3.metric("Brutto", f"€{metro_parsed['brutto_total']:,.2f}")
+
+            if st.button("📥 Import this invoice", type="primary", key="metro_import_btn"):
+                ok, msg = import_metro_invoice(metro_parsed, metro_file.name)
+                if ok:
+                    load_metro_invoices.clear()
+                    load_monthly_costs.clear()
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.warning(msg)
+
+with st.expander("📋 Metro invoice history", expanded=False):
+    metro_hist = load_metro_invoices()
+    if metro_hist.empty:
+        st.caption("No Metro invoices imported yet.")
+    else:
+        @st.dialog("Delete Metro invoice?")
+        def confirm_delete_metro_dialog(invoice_number, invoice_date, brutto_total):
+            st.write(f"Delete invoice **{invoice_number}** ({invoice_date}, €{brutto_total:,.2f} brutto)?")
+            st.warning("This removes the invoice and its line items from history.")
+            st.caption("This cannot be undone.")
+            c_yes, c_no = st.columns(2)
+            if c_yes.button("Yes, delete", type="primary", use_container_width=True, key=f"metro_del_yes_{invoice_number}"):
+                delete_metro_invoice(invoice_number)
+                load_metro_invoices.clear()
+                load_monthly_costs.clear()
+                st.rerun()
+            if c_no.button("No, cancel", use_container_width=True, key=f"metro_del_no_{invoice_number}"):
+                st.rerun()
+
+        mh_header = st.columns([1.6, 1.1, 1.1, 0.9, 0.9, 0.9, 0.8, 0.6])
+        for col, label in zip(mh_header, ["Invoice #", "Date", "Delivered", "Netto", "USt.", "Brutto", "Items", ""]):
+            col.markdown(f"**{label}**")
+
+        for row in metro_hist.itertuples():
+            mh = st.columns([1.6, 1.1, 1.1, 0.9, 0.9, 0.9, 0.8, 0.6])
+            mh[0].write(row.invoice_number)
+            mh[1].write(row.invoice_date)
+            mh[2].write(row.delivery_date or "—")
+            mh[3].write(f"€{row.netto_total:,.2f}")
+            mh[4].write(f"€{row.vat_total:,.2f}")
+            mh[5].write(f"€{row.brutto_total:,.2f}")
+            with mh[6].popover("View"):
+                metro_item_rows = load_metro_invoice_items(row.invoice_number)
+                if metro_item_rows.empty:
+                    st.caption("No line items recorded for this invoice.")
+                else:
+                    st.dataframe(
+                        metro_item_rows.rename(columns={
+                            "pos": "#", "description": "Item", "product_number": "Art.-Nr.", "quantity": "Qty",
+                            "unit": "Unit", "unit_price": "Unit price (EUR)", "line_total": "Total (EUR)",
+                        }),
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "Unit price (EUR)": st.column_config.NumberColumn(format="€%.3f"),
+                            "Total (EUR)": st.column_config.NumberColumn(format="€%.2f"),
+                        },
+                    )
+            if mh[7].button("🗑️", key=f"metro_del_{row.invoice_number}", help="Delete this invoice"):
+                confirm_delete_metro_dialog(row.invoice_number, row.invoice_date, row.brutto_total)
 
 st.divider()
 st.header("💰 Invoices — Paid & Unpaid")

@@ -2,6 +2,8 @@
 # bestellliste/ is NOT ignored: it holds blank vendor order-sheet templates
 # (no transaction data) that order_utils.py needs at runtime to generate orders.
 invoices/
+fatihet/
+metro/
 orders/
 
 # Database — source of truth and its backups/dumps, contains the same business data
