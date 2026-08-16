@@ -154,6 +154,15 @@ def set_invoice_paid_status(invoice_number: str, paid: bool):
     conn.close()
 
 
+def delete_invoice(invoice_number: str):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM invoice_line_items WHERE invoice_number = ?", (invoice_number,))
+    cur.execute("DELETE FROM invoices WHERE invoice_number = ?", (invoice_number,))
+    conn.commit()
+    conn.close()
+
+
 @st.cache_data
 def load_fatihet_invoices():
     conn = sqlite3.connect(DB_PATH)
@@ -874,16 +883,30 @@ else:
         if c_no.button("No, cancel", use_container_width=True, key=f"pay_no_{invoice_number}_{target_paid}"):
             st.rerun()
 
+    @st.dialog("Delete invoice?")
+    def confirm_delete_invoice_dialog(invoice_number, brutto_total):
+        st.write(f"Delete invoice **{invoice_number}** (€{brutto_total:,.2f} brutto)?")
+        st.warning("This removes the invoice and its line items from history.")
+        st.caption("This cannot be undone.")
+        c_yes, c_no = st.columns(2)
+        if c_yes.button("Yes, delete", type="primary", use_container_width=True, key=f"inv_del_yes_{invoice_number}"):
+            delete_invoice(invoice_number)
+            load_invoices_by_status.clear()
+            load_monthly_costs.clear()
+            st.rerun()
+        if c_no.button("No, cancel", use_container_width=True, key=f"inv_del_no_{invoice_number}"):
+            st.rerun()
+
     def render_invoice_table(df, make_paid: bool):
         if df.empty:
             st.caption("Nothing here.")
             return
-        header = st.columns([1, 1, 2, 1.2, 1.2, 1.2, 1.3])
-        labels = ["Invoice #", "Date", "Customer", "Netto", "USt.", "Brutto", ""]
+        header = st.columns([1, 1, 2, 1.2, 1.2, 1.2, 1.1, 0.6])
+        labels = ["Invoice #", "Date", "Customer", "Netto", "USt.", "Brutto", "", ""]
         for col, label in zip(header, labels):
             col.markdown(f"**{label}**")
         for row in df.itertuples():
-            c = st.columns([1, 1, 2, 1.2, 1.2, 1.2, 1.3])
+            c = st.columns([1, 1, 2, 1.2, 1.2, 1.2, 1.1, 0.6])
             c[0].write(row.invoice_number)
             c[1].write(row.invoice_date)
             c[2].write(row.customer_name)
@@ -893,6 +916,8 @@ else:
             btn_label = "✅ Mark paid" if make_paid else "↩️ Mark unpaid"
             if c[6].button(btn_label, key=f"toggle_paid_{row.invoice_number}_{make_paid}"):
                 confirm_payment_status_dialog(row.invoice_number, row.brutto_total, make_paid)
+            if c[7].button("🗑️", key=f"inv_del_{row.invoice_number}_{make_paid}", help="Delete this invoice"):
+                confirm_delete_invoice_dialog(row.invoice_number, row.brutto_total)
 
     tab_unpaid, tab_paid = st.tabs([f"🔴 Unpaid ({len(unpaid_df)})", f"🟢 Paid ({len(paid_df)})"])
 
