@@ -19,16 +19,19 @@ This project extracts the invoice history into a real database, keeps FeinFood p
 
 ```
 Rooster/
-├── app.py                  # Streamlit app — all UI lives here
+├── app.py                  # Streamlit app — UI only, calls into db.py for every read/write
+├── db.py                   # Every SQLite read/write function, with @st.cache_data caching
 ├── order_utils.py          # Vendor order file + order confirmation file generation
 ├── invoice_parser.py       # Parses FeinFood invoice PDFs (pdfplumber + regex)
 ├── invoice_ingest.py       # Imports parsed FeinFood invoices into the catalog/invoice tables
 ├── fatihet_parser.py       # Parses Fatih Et (meat) invoice PDFs
 ├── metro_parser.py         # Parses METRO invoice PDFs (best-effort on line items, reliable on totals)
-├── compare_utils.py        # Order-confirmation parsing + discrepancy comparison
+├── compare_utils.py        # Order-confirmation parsing, discrepancy comparison, dispute messages
+├── tests/                  # pytest suite — see Testing below
 ├── invoices.db              # SQLite database (source of truth)
 ├── invoices_dump.sql       # Plain-text SQL dump of invoices.db, regenerate after schema changes
-├── requirements.txt        # Pinned Python dependencies
+├── requirements.txt        # Pinned runtime dependencies
+├── requirements-dev.txt    # requirements.txt + pytest, for running the test suite
 ├── Procfile                # Railway/Heroku-style start command for deployment
 ├── venv/                   # Project-local virtualenv (not committed)
 ├── invoices/                # Source PDFs — FeinFood Express invoices (RG####.pdf)
@@ -135,6 +138,27 @@ Netto/USt./Brutto totals from the invoice are compared against the order's own t
 ## Deployment
 
 The app is set up to deploy on [Railway](https://railway.com): the `Procfile` starts Streamlit bound to Railway's `$PORT`, and the [Configuration](#configuration) env vars (`DB_PATH`, `ORDERS_DIR`, etc.) let you point everything at a persistent Volume (e.g. mounted at `/data`) so the database and generated order files survive redeploys — SQLite is a file, and without a mounted volume it's wiped on every deploy. The app doesn't auto-create its schema, so the volume needs to be seeded once with a copy of `invoices.db` (e.g. via `railway volume browse` or piping in `invoices_dump.sql`).
+
+## Testing
+
+```bash
+./venv/bin/pip install -r requirements-dev.txt
+./venv/bin/python -m pytest tests/
+```
+
+51 tests, covering:
+
+| Module | What's tested |
+|---|---|
+| `db.py` | Product CRUD (including the price-era UNIQUE constraint), `place_order` (totals math, order/order_items rows), invoice paid/delete, and the Fatihet/Metro vendor-invoice CRUD — run once per vendor via `@pytest.mark.parametrize`, since both share the same `vendor`-parameterized functions. |
+| `invoice_ingest.py` | Ingesting a parsed invoice, duplicate invoice-number rejection, product-matching (reuses an existing price era vs. creates a new one), and the folder-scan (`list_unimported_pdfs`). |
+| `compare_utils.py` | Every comparison outcome (`✅ OK`, quantity/price/VAT mismatch, missing item, unexpected charge) and that `build_dispute_message` includes only flagged rows. |
+| `order_utils.py` | `compute_totals` — Netto/USt./Brutto math across single items, multiple VAT rates, and the empty-cart case. |
+| `invoice_parser.py`, `fatihet_parser.py`, `metro_parser.py` | Each parser run against a real sample invoice PDF, asserting header fields, exact line items, and totals — plus a reconciliation check that summed line items match the invoice's own total. |
+
+Database tests never touch the real `invoices.db` — `tests/conftest.py`'s `test_db` fixture creates a fresh temp SQLite file per test (full schema) and monkeypatches it over `db.DB_PATH` / `invoice_ingest.DB_PATH`, clearing every `@st.cache_data` function's cache first (Streamlit's cache is keyed by function+args, not by which DB file is active, so a stale result could otherwise leak in from an earlier test).
+
+The parser tests need a real sample PDF (`invoices/RG7206.pdf`, `fatihet/RG2606760.pdf`, `metro/75_502_529930_20260813173708_invoice_copy_main.pdf`) — all gitignored business data. Each test module skips itself automatically if its sample file isn't present, e.g. on a fresh clone.
 
 ## Notes
 
