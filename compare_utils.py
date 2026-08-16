@@ -132,3 +132,52 @@ def compare_order_to_invoice(order_items: list[dict], invoice_items: list[dict])
         })
 
     return results
+
+
+def build_dispute_message(invoice_data: dict, order_data: dict, comparison: list[dict]) -> str:
+    """Plain-text message summarizing every flagged discrepancy, ready to send to the vendor."""
+    flagged = [row for row in comparison if row["status"] != "✅ OK"]
+
+    lines = [
+        f"Subject: Invoice discrepancy — Invoice {invoice_data['invoice_number']} "
+        f"({invoice_data['invoice_date']})",
+        "",
+        "Hello,",
+        "",
+        f"We've reviewed invoice {invoice_data['invoice_number']} dated {invoice_data['invoice_date']} "
+        f"against our order #{order_data['order_id']} ({order_data['order_date']}) and found the "
+        f"following discrepanc{'y' if len(flagged) == 1 else 'ies'}:",
+        "",
+    ]
+
+    for row in flagged:
+        lines.append(f"- {row['product_name']} (#{row['product_number']}): {row['notes']}")
+        ordered = (
+            f"{row['ordered_qty']:g} x €{row['ordered_price']:.2f} = €{row['ordered_total']:.2f}"
+            if row["ordered_qty"] is not None else "not part of our order"
+        )
+        invoiced = (
+            f"{row['invoiced_qty']:g} x €{row['invoiced_price']:.2f} = €{row['invoiced_total']:.2f}"
+            if row["invoiced_qty"] is not None else "not billed"
+        )
+        lines.append(f"    Ordered: {ordered}")
+        lines.append(f"    Invoiced: {invoiced}")
+        lines.append("")
+
+    invoice_netto = invoice_data.get("netto_total")
+    invoice_brutto = invoice_data.get("brutto_total")
+    order_items = order_data.get("items", [])
+    order_netto = round(sum(it["line_total"] for it in order_items), 2) if order_items else None
+
+    if invoice_brutto is not None and invoice_netto is not None:
+        lines.append(f"Invoice totals: Netto €{invoice_netto:.2f}, Brutto €{invoice_brutto:.2f}")
+    if order_netto is not None:
+        lines.append(f"Our order total (Netto): €{order_netto:.2f}")
+    lines.append("")
+
+    lines.append("Please review and either issue a corrected invoice or confirm the reason for these differences.")
+    lines.append("")
+    lines.append("Thank you,")
+    lines.append("Habib RFC Mannheim GmbH")
+
+    return "\n".join(lines)

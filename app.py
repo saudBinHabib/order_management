@@ -1340,6 +1340,16 @@ invoice_file = st.file_uploader("Vendor invoice (.pdf)", type=["pdf"], key="vend
 if st.button("🔍 Compare", type="primary", disabled=(order_data is None or invoice_file is None)):
     invoice_data = invoice_parser.parse_invoice_pdf(invoice_file)
     comparison = compare_utils.compare_order_to_invoice(order_data["items"], invoice_data["items"])
+    st.session_state["verify_result"] = {
+        "invoice_data": invoice_data, "order_data": order_data, "comparison": comparison,
+    }
+    st.session_state.pop("dispute_message", None)
+
+verify_result = st.session_state.get("verify_result")
+if verify_result:
+    invoice_data = verify_result["invoice_data"]
+    order_data = verify_result["order_data"]
+    comparison = verify_result["comparison"]
     comp_df = pd.DataFrame(comparison)
 
     ok_count = int((comp_df["status"] == "✅ OK").sum())
@@ -1385,3 +1395,31 @@ if st.button("🔍 Compare", type="primary", disabled=(order_data is None or inv
         "Brutto", f"€{invoice_brutto:,.2f}" if invoice_brutto is not None else "n/a",
         delta=f"€{(invoice_brutto - order_brutto):,.2f}" if invoice_brutto is not None else None,
     )
+
+    st.subheader("Next steps")
+    verify_c1, verify_c2 = st.columns(2)
+    with verify_c1:
+        if st.button(
+            "⚠️ Dispute this invoice", use_container_width=True, disabled=(issue_count == 0),
+            help="Nothing flagged — nothing to dispute." if issue_count == 0 else None,
+        ):
+            st.session_state["dispute_message"] = compare_utils.build_dispute_message(
+                invoice_data, order_data, comparison
+            )
+    with verify_c2:
+        if st.button("✅ Confirm & record as unpaid", type="primary", use_container_width=True):
+            ok, msg = invoice_ingest.ingest_invoice(invoice_data, mark_paid=False)
+            if ok:
+                load_data.clear()
+                load_invoices_by_status.clear()
+                load_monthly_costs.clear()
+                st.session_state.pop("verify_result", None)
+                st.session_state.pop("dispute_message", None)
+                st.success(f"{msg} Recorded as unpaid — see Invoices — Paid & Unpaid above.")
+                st.rerun()
+            else:
+                st.warning(msg)
+
+    dispute_message = st.session_state.get("dispute_message")
+    if dispute_message:
+        st.text_area("Dispute message — copy and send to the vendor", dispute_message, height=280)
